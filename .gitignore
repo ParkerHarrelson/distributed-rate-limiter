@@ -1,0 +1,9 @@
+/bin/
+/results/*
+!/results/.gitkeep
+*.test
+*.out
+coverage.*
+.DS_Store
+.idea/
+.vscode/

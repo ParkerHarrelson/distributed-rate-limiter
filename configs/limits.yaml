@@ -1,0 +1,37 @@
+# Traffic policy. Every matching rule applies; a request must pass all of them.
+#
+# algorithm: fixed_window | sliding_counter | token_bucket   (env ALGORITHM overrides)
+# fail_mode: "" | open | closed | local                        (env FAIL_MODE overrides)
+#   empty = no resilience layer: backend errors surface as HTTP 503.
+#
+# scope: user | endpoint | user_endpoint | global
+# limit.burst only matters for token_bucket (defaults to rate).
+# Patterns in endpoints/users match exactly or by trailing-* prefix.
+
+algorithm: fixed_window
+fail_mode: ""
+
+rules:
+  # Every user gets 50 requests per 10s across all endpoints.
+  - name: user-global
+    scope: user
+    limit: { rate: 50, period: 10s, burst: 50 }
+
+  # The expensive endpoint is additionally capped per user.
+  - name: user-expensive
+    scope: user_endpoint
+    endpoints: [/api/expensive]
+    limit: { rate: 5, period: 10s, burst: 5 }
+
+  # VIP users get a higher global budget (rule order: this still composes with
+  # user-global, so a VIP is bounded by the tighter of the two. Making VIPs
+  # *exempt* from user-global is a policy-engine exercise; see the curriculum).
+  - name: vip-global
+    scope: user
+    users: [vip-*]
+    limit: { rate: 500, period: 10s, burst: 500 }
+
+  # Protect the cluster as a whole regardless of who is calling.
+  - name: cluster-wide
+    scope: global
+    limit: { rate: 2000, period: 1s, burst: 2000 }
