@@ -31,7 +31,7 @@ curl -s -D - -o /dev/null -H 'X-User-ID: alice' http://localhost:8081/api/cheap 
 echo
 
 echo "==> steady load: 5 users x 2x their limit for 20s"
-go run ./cmd/loadgen -mode steady -users 5 -rps 50 -duration 20s -label "$ALGORITHM" -out "results/demo-$ALGORITHM.csv"
+./scripts/loadgen.sh -mode steady -users 5 -rps 50 -duration 20s -label "$ALGORITHM" -out "results/demo-$ALGORITHM.csv"
 
 echo "Grafana:    http://localhost:3000   (dashboard: Distributed Rate Limiter)"
 echo "Prometheus: http://localhost:9090"

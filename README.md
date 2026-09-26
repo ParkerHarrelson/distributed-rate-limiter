@@ -1,7 +1,8 @@
 # Distributed Rate Limiter
 
 [![ci](https://github.com/ParkerHarrelson/distributed-rate-limiter/actions/workflows/ci.yml/badge.svg)](https://github.com/ParkerHarrelson/distributed-rate-limiter/actions/workflows/ci.yml)
-![go](https://img.shields.io/badge/go-1.27-00ADD8?logo=go&logoColor=white)
+![java](https://img.shields.io/badge/java-25-007396?logo=openjdk&logoColor=white)
+![spring boot](https://img.shields.io/badge/spring%20boot-4.1-6DB33F?logo=springboot&logoColor=white)
 ![license](https://img.shields.io/badge/license-MIT-green)
 
 A rate limiter that enforces per-user, per-endpoint and cluster-wide limits
@@ -23,7 +24,7 @@ flowchart LR
 
 ## Quick start
 
-Requires Docker and Go 1.27.
+Requires Docker and JDK 25 (the Gradle wrapper downloads Gradle itself).
 
 ```sh
 make demo
@@ -47,17 +48,18 @@ make down
 
 | | fixed window | sliding log | sliding counter | token bucket |
 |---|---|---|---|---|
-| state per key | 2 ints | N timestamps | 3 ints | float + timestamp |
+| state per key | 2 ints | N timestamps | 3 ints | double + timestamp |
 | boundary burst | 2x limit | none | ~none | up to `burst` by design |
 | separates rate from burst | no | no | no | **yes** |
-| in-memory | `memory.FixedWindow` | `memory.SlidingLog` | `memory.SlidingCounter` | `memory.TokenBucket` |
-| Redis (Lua) | `fixedwindow.lua` | stretch | `slidingwindow.lua` | `tokenbucket.lua` |
+| in-memory | `FixedWindowLimiter` | `SlidingLogLimiter` | `SlidingCounterLimiter` | `TokenBucketLimiter` |
+| Redis (Lua) | `fixed_window.lua` | stretch | `sliding_counter.lua` | `token_bucket.lua` |
 
-Every implementation must pass the same [conformance suite](internal/limiter/conformance/conformance.go),
-which pins down the observable contract (exact capacity under 32 concurrent
-goroutines, honest `Retry-After`, algorithm-specific boundary behaviour). The
+Every implementation must pass the same
+[contract test suite](core/src/test/java/dev/parkerharrelson/ratelimiter/core/contract/LimiterContract.java),
+which pins down the observable behaviour (exact capacity under 32 concurrent
+threads, honest `Retry-After`, algorithm-specific boundary behaviour). The
 suite runs with a fake clock for the in-memory versions and against a real
-Redis for the Lua versions.
+Redis (Testcontainers) for the Lua versions.
 
 Policy is YAML ([configs/limits.yaml](configs/limits.yaml)): rules with a
 scope (`user`, `endpoint`, `user_endpoint`, `global`), optional user/endpoint
@@ -80,21 +82,19 @@ the alternatives that were rejected.
 ## Layout
 
 ```
-cmd/server            one API replica
-cmd/loadgen           open-loop load generator (steady and boundary modes)
-internal/limiter      Limiter interface + Decision
-  memory/             in-process algorithms
-  redis/              Lua scripts + wrappers
-  conformance/        shared acceptance suite
-internal/policy       rules, scopes, key derivation, YAML
-internal/resilience   fail-open / fail-closed / local fallback + circuit breaker
-internal/httpapi      middleware, headers, demo endpoints
-internal/metrics      Prometheus instruments
-deploy/               Dockerfile, docker-compose, toxiproxy config
-configs/              limits.yaml, prometheus, grafana provisioning + dashboard
-scripts/              demo, bench, chaos
-docs/                 architecture, curriculum, results, failure scenarios
+core/       framework-free Java: Limiter API, algorithms (memory + Redis/Lua),
+            policy engine, resilience layer, contract test suite, JMH benchmarks
+server/     Spring Boot replica: RateLimitFilter, demo endpoints, Micrometer metrics
+loadgen/    open-loop load generator (steady and boundary modes), plain JDK
+deploy/     Dockerfile, docker-compose, toxiproxy config
+configs/    limits.yaml, prometheus, grafana provisioning + dashboard
+scripts/    demo, bench, chaos
+docs/       architecture, curriculum, results, failure scenarios
 ```
+
+Useful targets: `make test` (unit), `make test-all` (with Redis via
+Testcontainers), `make test-v` (contract tests as PASSED/SKIPPED/FAILED),
+`make bench` (JMH), `make bench-all` (algorithm comparison under load).
 
 ## How this was built
 
@@ -104,7 +104,8 @@ engineer; the rate-limiting algorithms, Lua scripts and resilience layer are
 hand-written against that harness, exercise by exercise, following
 [docs/curriculum.md](docs/curriculum.md). The fixed-window implementation in
 each backend is the worked reference; the rest are the exercises. If a stub
-still says `ErrNotImplemented`, that exercise has not been reached yet.
+still throws `ExerciseNotImplementedException`, that exercise has not been
+reached yet.
 
 ## License
 

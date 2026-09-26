@@ -31,9 +31,10 @@ x-api: &api
       condition: service_started
   healthcheck:
     test: ["CMD", "curl", "-fsS", "http://localhost:8080/healthz"]
-    interval: 2s
-    timeout: 1s
-    retries: 15
+    interval: 3s
+    timeout: 2s
+    retries: 30
+    start_period: 15s
   restart: unless-stopped
 
 services:
@@ -99,10 +100,10 @@ services:
     depends_on: [prometheus]
 
   # On-demand load generator; not started with `up`.
-  #   docker compose -f deploy/docker-compose.yml run --rm loadgen -rps 200 -duration 30s
+  #   docker compose -f deploy/docker-compose.yml run --rm loadgen -targets http://api-1:8080,http://api-2:8080,http://api-3:8080 -rps 200 -duration 30s
   loadgen:
     image: rate-limiter:local
-    entrypoint: ["loadgen"]
+    entrypoint: ["java", "-jar", "/app/loadgen.jar"]
     command: ["-targets", "http://api-1:8080,http://api-2:8080,http://api-3:8080"]
     profiles: [tools]
     depends_on: [api-1, api-2, api-3]

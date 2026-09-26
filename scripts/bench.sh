@@ -27,11 +27,11 @@ for algo in $ALGOS; do
   # flush limiter state between runs so algorithms start from the same place
   docker compose -f deploy/docker-compose.yml exec -T redis redis-cli FLUSHALL >/dev/null
 
-  go run ./cmd/loadgen -mode steady -users 5 -rps "$STEADY_RPS" -duration "$STEADY_DURATION" \
+  ./scripts/loadgen.sh -mode steady -users 5 -rps "$STEADY_RPS" -duration "$STEADY_DURATION" \
      -label "$algo" -out "results/$algo-steady.csv" -json "results/$algo-steady.json" | tee "results/$algo-steady.md"
 
   docker compose -f deploy/docker-compose.yml exec -T redis redis-cli FLUSHALL >/dev/null
-  go run ./cmd/loadgen -mode boundary -users 3 -burst 50 -period 10s -cycles 3 \
+  ./scripts/loadgen.sh -mode boundary -users 3 -burst 50 -period 10s -cycles 3 \
      -label "$algo" -json "results/$algo-boundary.json" | tee "results/$algo-boundary.md"
 done
 echo

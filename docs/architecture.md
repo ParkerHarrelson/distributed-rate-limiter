@@ -15,12 +15,13 @@ flowchart LR
     LG --> A3[api-3]
     A1 & A2 & A3 -->|EVALSHA per check| TP[Toxiproxy]
     TP --> R[(Redis)]
-    P[Prometheus] -.scrape /metrics.-> A1 & A2 & A3
+    P[Prometheus] -.scrape /actuator/prometheus.-> A1 & A2 & A3
     G[Grafana] -.-> P
 ```
 
-- **api-N**: `cmd/server`. Stateless. Every request is resolved against the
-  policy into zero or more checks; each check is one atomic call to Redis.
+- **api-N**: the `server` module, a Spring Boot application on virtual
+  threads. Stateless. Every request is resolved against the policy into zero
+  or more checks; each check is one atomic call to Redis.
 - **Redis**: the only shared state. Each limiter key is one hash; each
   algorithm is one Lua script.
 - **Toxiproxy**: sits between the replicas and Redis so latency, timeouts and
@@ -33,39 +34,42 @@ flowchart LR
 ```mermaid
 sequenceDiagram
     participant C as client
-    participant M as middleware
-    participant P as policy
-    participant L as limiter (redis)
-    participant H as handler
-    C->>M: GET /api/expensive, X-User-ID: alice
-    M->>P: Resolve(alice, /api/expensive)
-    P-->>M: [user-global:alice, user-expensive:alice:/api/expensive, cluster-wide]
+    participant F as RateLimitFilter
+    participant P as Policy
+    participant L as Limiter (Redis)
+    participant H as controller
+    C->>F: GET /api/expensive, X-User-ID: alice
+    F->>P: resolve(alice, /api/expensive)
+    P-->>F: [user-global:alice, user-expensive:alice:/api/expensive, cluster-wide]
     loop each check
-        M->>L: Allow(key, limit)  (one EVALSHA)
-        L-->>M: Decision{allowed, remaining, retry_after, reset_after}
+        F->>L: allow(key, limit)  (one EVALSHA)
+        L-->>F: Decision{allowed, remaining, retryAfter, resetAfter}
     end
     alt any denied
-        M-->>C: 429 + X-RateLimit-* + Retry-After
+        F-->>C: 429 + X-RateLimit-* + Retry-After
     else all allowed
-        M->>H: next
+        F->>H: chain.doFilter
         H-->>C: 200 + X-RateLimit-* (tightest rule)
     end
 ```
 
-## Packages
+## Modules and packages
 
-| package | responsibility | owner |
+| module / package | responsibility | owner |
 |---|---|---|
-| `internal/limiter` | `Limiter` interface, `Limit`, `Decision` | scaffold |
-| `internal/limiter/memory` | in-process algorithms (fixed window reference; token bucket, sliding log, sliding counter exercises) | exercises |
-| `internal/limiter/redis` | Lua scripts + thin Go wrappers (fixed window reference; token bucket, sliding counter exercises) | exercises |
-| `internal/limiter/conformance` | the shared acceptance suite every limiter must pass | scaffold |
-| `internal/policy` | rule matching, key derivation, YAML loading | scaffold |
-| `internal/resilience` | fail-open/closed/local + circuit breaker | exercise |
-| `internal/httpapi` | middleware, headers, demo endpoints | scaffold |
-| `internal/metrics` | Prometheus instruments | scaffold |
-| `internal/clock` | injectable clock for deterministic tests | scaffold |
-| `cmd/server`, `cmd/loadgen` | binaries | scaffold |
+| `core` `…core` | `Limiter`, `Limit`, `Decision`, exceptions | scaffold |
+| `core` `…core.clock` | `MutableClock`, `SkewedClock`, nanosecond helpers | scaffold |
+| `core` `…core.memory` | in-process algorithms (fixed window reference; token bucket, sliding log, sliding counter exercises) | exercises |
+| `core` `…core.redis` | Lettuce script runner, Lua scripts + thin wrappers (fixed window reference; token bucket, sliding counter exercises) | exercises |
+| `core` `…core.policy` | rules, scopes, key derivation, YAML loading | scaffold |
+| `core` `…core.resilience` | fail-open/closed/local + circuit breaker | exercise |
+| `core` test `…core.contract` | the shared acceptance suite every limiter must pass | scaffold |
+| `core` jmh | JMH micro-benchmarks | scaffold |
+| `server` | Spring Boot wiring, `RateLimitFilter`, controllers, Micrometer metrics | scaffold |
+| `loadgen` | open-loop load generator (steady and boundary modes) | scaffold |
+
+`core` has no Spring dependency on purpose: the algorithms can be read,
+unit-tested with a fake clock, and benchmarked without a container starting.
 
 ## Key decisions
 
@@ -94,18 +98,29 @@ key agree on boundaries without coordination, and the load generator can
 predict them, which is what makes the boundary-burst experiment possible.
 
 **Uniform reply shape.** Every script returns
-`{allowed, limit, remaining, retry_after_ms, reset_after_ms}`. The Go
+`{allowed, limit, remaining, retry_after_ms, reset_after_ms}`. The Java
 wrappers are therefore identical and interchangeable; the algorithm lives
 entirely in Lua and can be diffed and reviewed as such.
+
+**One Lettuce connection, short timeout, reject-while-disconnected.** Lettuce
+multiplexes all callers over a single connection, which is the right shape
+for tiny scripted commands. The command timeout is 50ms by default: a rate
+limiter slower than the request it protects is worse than none.
+`DisconnectedBehavior.REJECT_COMMANDS` fails fast during an outage instead of
+queueing a backlog that floods Redis when it returns.
 
 **Policy composition is AND.** A request must pass every matching rule.
 Consequence: a token may be consumed from rule A even though rule B denies
 the request. Documented as a known trade-off; Exercise 6 explores fixes.
 
-**Fail behaviour is a separate layer.** The middleware returns 503 on limiter
+**Fail behaviour is a separate layer.** The filter returns 503 on limiter
 error. The resilience wrapper (Exercise 5) decides between open / closed /
 local fallback and adds a circuit breaker so that a partition costs one
 timeout per cooldown rather than one per request.
+
+**Virtual threads.** `spring.threads.virtual.enabled=true`, so a blocking
+Redis call per request does not pin a platform thread. This is what makes the
+simple synchronous Lettuce call acceptable at thousands of requests per second.
 
 ## Alternatives considered
 
@@ -113,26 +128,28 @@ timeout per cooldown rather than one per request.
   and reconciles): no shared hot path, but accuracy depends on even load
   balancing and N is rarely stable under autoscaling. Kept as the *fallback*
   mode, not the primary.
+- **Bucket4j with its Redis/JCache backends, or Resilience4j RateLimiter**:
+  production-ready, and worth reading. Using them would remove the part of
+  the project that teaches anything.
 - **A dedicated rate-limit service** (Envoy `ratelimit`, a gRPC sidecar):
-  the right shape at scale, but it moves the interesting logic behind an RPC
-  and out of the learning path.
+  the right shape at scale, but it moves the interesting logic behind an RPC.
 - **Redis Cell / Redis Functions**: `CL.THROTTLE` is a GCRA implementation
-  as a module; Functions are Lua scripts with a lifecycle. Both are worth
-  knowing; plain `EVALSHA` is the most portable.
+  as a module; Functions are Lua scripts with a lifecycle. Plain `EVALSHA` is
+  the most portable.
 - **Client-passed timestamps**: rejected, see above.
 
 ## Observability
 
-Metrics (`internal/metrics`):
+Micrometer meters, exported at `/actuator/prometheus`:
 
-| metric | labels | use |
-|---|---|---|
-| `ratelimiter_decisions_total` | rule, algorithm, result | allowed/denied/error rates, per rule |
-| `ratelimiter_check_duration_seconds` | algorithm, backend | Redis round-trip cost of a check |
-| `ratelimiter_backend_errors_total` | | outage detection |
-| `ratelimiter_fallback_decisions_total` | mode, result | what the resilience layer did |
-| `http_requests_total`, `http_request_duration_seconds` | route, status | end-to-end view |
-| `ratelimiter_info` | instance_id, algorithm, backend, fail_mode | dashboard labels |
+| meter | Prometheus name | tags | use |
+|---|---|---|---|
+| `ratelimiter.decisions` | `ratelimiter_decisions_total` | rule, algorithm, result | allowed/denied/error rates, per rule |
+| `ratelimiter.check.duration` | `ratelimiter_check_duration_seconds_*` | algorithm, backend | Redis round-trip cost of a check |
+| `ratelimiter.backend.errors` | `ratelimiter_backend_errors_total` | | outage detection |
+| `ratelimiter.fallback.decisions` | `ratelimiter_fallback_decisions_total` | mode, result | what the resilience layer did |
+| `http.server.requests` (Boot) | `http_server_requests_seconds_*` | uri, status | end-to-end view |
+| `ratelimiter.info` | `ratelimiter_info` | instance_id, algorithm, backend, fail_mode | dashboard labels |
 
 Response headers: `X-RateLimit-Limit`, `X-RateLimit-Remaining`,
 `X-RateLimit-Reset` (seconds), `X-RateLimit-Policy` (rule name),

@@ -1,0 +1,40 @@
+server:
+  port: ${PORT:8080}
+
+spring:
+  application:
+    name: rate-limiter
+  threads:
+    virtual:
+      enabled: true
+  jackson:
+    default-property-inclusion: non_null
+
+ratelimiter:
+  instance-id: ${INSTANCE_ID:${HOSTNAME:local}}
+  backend: ${BACKEND:redis}
+  redis-addr: ${REDIS_ADDR:localhost:6379}
+  redis-timeout: ${REDIS_TIMEOUT:50ms}
+  limits-file: ${LIMITS_FILE:configs/limits.yaml}
+  algorithm: ${ALGORITHM:}
+  fail-mode: ${FAIL_MODE:}
+  local-share: ${LOCAL_SHARE:1.0}
+  clock-skew: ${CLOCK_SKEW:0s}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+
+logging:
+  level:
+    io.lettuce: WARN
+    org.apache.catalina: WARN

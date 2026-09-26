@@ -1,0 +1,24 @@
+-- Token bucket - EXERCISE 3 (see docs/curriculum.md).
+--
+-- KEYS[1]  key for this client/rule
+-- ARGV[1]  rate       tokens added per period
+-- ARGV[2]  period_ms  refill period in milliseconds
+-- ARGV[3]  burst      bucket capacity
+--
+-- Must return { allowed, limit, remaining, retry_after_ms, reset_after_ms }
+-- with all five values as INTEGERS (Redis converts Lua numbers to integers by
+-- truncation, so round deliberately rather than by accident).
+--
+-- Port your TokenBucketLimiter here. Things that are different in Lua/Redis:
+--
+--   * There is no object. Store the bucket as a hash with whatever fields you
+--     chose (tokens, last refill time, ...). HMGET fetches several at once.
+--   * There is no typed storage. Everything you HSET becomes a string; decide
+--     on a precision and be consistent (store tokens * 1000 as an int, or
+--     store a float and tostring/tonumber it - what are the trade-offs?).
+--   * Set a TTL. When is it safe for the key to disappear? (What does a
+--     missing key mean to your algorithm, and when does the bucket reach that
+--     state on its own?)
+--   * Read the clock with redis.call('TIME'); do not trust ARGV for time.
+
+return redis.error_reply('NOT_IMPLEMENTED')

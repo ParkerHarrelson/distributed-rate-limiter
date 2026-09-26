@@ -581,7 +581,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (status) (rate(http_requests_total[10s]))",
+          "expr": "sum by (status) (rate(http_server_requests_seconds_count[10s]))",
           "legendFormat": "{{status}}",
           "refId": "A"
         }

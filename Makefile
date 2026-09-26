@@ -1,6 +1,5 @@
 COMPOSE := docker compose -f deploy/docker-compose.yml
-GOFLAGS := -trimpath
-export PATH := $(PATH):/opt/homebrew/bin:$(HOME)/go/bin
+GRADLE  := ./gradlew
 
 .DEFAULT_GOAL := help
 
@@ -11,55 +10,46 @@ help: ## Show this help
 ## ---- build & test -------------------------------------------------------
 
 .PHONY: build
-build: ## Build server and loadgen binaries into ./bin
-	@mkdir -p bin
-	go build $(GOFLAGS) -o bin/server ./cmd/server
-	go build $(GOFLAGS) -o bin/loadgen ./cmd/loadgen
+build: ## Compile and package both jars (server/build/libs/server.jar, loadgen/build/libs/loadgen.jar)
+	$(GRADLE) -q :server:bootJar :loadgen:jar
 
 .PHONY: test
-test: ## Unit tests (Redis tests skip unless REDIS_ADDR is set)
-	go test -race -count=1 ./...
+test: ## Unit tests only (Redis integration tests skipped)
+	$(GRADLE) test -PskipIntegration
 
-.PHONY: test-v
-test-v: ## Unit tests, verbose, showing which exercises are still skipped
-	go test -race -count=1 -v ./internal/limiter/... ./internal/resilience/... 2>&1 | grep -E '^(---|\s+---|ok|FAIL)'
-
-.PHONY: redis
-redis: ## Start a standalone Redis on :6379 for integration tests
-	@docker rm -f rl-redis >/dev/null 2>&1 || true
-	docker run -d --name rl-redis -p 6379:6379 redis:7-alpine >/dev/null
-	@echo "redis on localhost:6379 (stop: docker rm -f rl-redis)"
+.PHONY: test-all
+test-all: ## All tests; Redis ones use Testcontainers (Docker) or REDIS_ADDR if set
+	$(GRADLE) test
 
 .PHONY: test-integration
-test-integration: ## Run Redis integration tests (needs `make redis` or a running stack)
-	REDIS_ADDR=$${REDIS_ADDR:-localhost:6379} go test -race -count=1 -v ./internal/limiter/redis/ 2>&1 | grep -E '^(---|\s+---|ok|FAIL|\s+.*\.go:)'
+test-integration: ## Only the Redis integration tests (set REDIS_ADDR=localhost:6379 to reuse the stack's Redis)
+	$(GRADLE) :core:test --tests 'dev.parkerharrelson.ratelimiter.core.redis.*' --rerun
+
+.PHONY: test-v
+test-v: ## Show every contract test as PASSED / SKIPPED / FAILED (skipped = exercise not done yet)
+	$(GRADLE) :core:test --rerun -PskipIntegration 2>&1 | grep -E 'PASSED|SKIPPED|FAILED' | sed 's/dev.parkerharrelson.ratelimiter.core.//' | sort
 
 .PHONY: bench
-bench: ## Micro-benchmarks for the in-memory algorithms
-	go test -run '^$$' -bench . -benchmem ./internal/limiter/memory/
+bench: ## JMH micro-benchmarks for the in-memory algorithms (results in core/build/results/jmh)
+	$(GRADLE) :core:jmh
 
-.PHONY: lint
-lint: ## go vet + golangci-lint (if installed)
-	go vet ./...
-	@command -v golangci-lint >/dev/null && golangci-lint run ./... || echo "golangci-lint not installed; skipped (brew install golangci-lint)"
+.PHONY: check
+check: ## Full Gradle check (compile everything, run all tests)
+	$(GRADLE) check
 
-.PHONY: fmt
-fmt: ## gofmt everything
-	gofmt -w ./cmd ./internal
-
-.PHONY: tidy
-tidy: ## go mod tidy
-	go mod tidy
+.PHONY: clean
+clean: ## Remove build outputs
+	$(GRADLE) clean
 
 ## ---- run ---------------------------------------------------------------
 
 .PHONY: run
-run: ## Run one server locally against localhost:6379 (PORT=8080)
-	go run ./cmd/server
+run: ## Run one replica locally against localhost:6379 (PORT=8080)
+	$(GRADLE) :server:bootRun
 
 .PHONY: run-memory
-run-memory: ## Run one server locally with the in-memory backend (no Redis needed)
-	BACKEND=memory go run ./cmd/server
+run-memory: ## Run one replica locally with the in-memory backend (no Redis needed)
+	BACKEND=memory $(GRADLE) :server:bootRun
 
 ## ---- stack --------------------------------------------------------------
 
@@ -90,6 +80,12 @@ ps: ## Show stack status
 flush: ## Wipe all limiter state in Redis
 	$(COMPOSE) exec -T redis redis-cli FLUSHALL
 
+.PHONY: redis
+redis: ## Start a standalone Redis on :6379 (for `make run` or REDIS_ADDR-based tests)
+	@docker rm -f rl-redis >/dev/null 2>&1 || true
+	docker run -d --name rl-redis -p 6379:6379 redis:7-alpine >/dev/null
+	@echo "redis on localhost:6379 (stop: docker rm -f rl-redis)"
+
 ## ---- experiments -------------------------------------------------------
 
 .PHONY: demo
@@ -98,7 +94,7 @@ demo: ## Bring the stack up and run the scripted demo
 
 .PHONY: loadgen
 loadgen: ## Run the load generator against the stack; e.g. make loadgen ARGS="-rps 200 -duration 30s"
-	go run ./cmd/loadgen $(ARGS)
+	./scripts/loadgen.sh $(ARGS)
 
 .PHONY: bench-all
 bench-all: ## Compare every algorithm under identical load; writes results/

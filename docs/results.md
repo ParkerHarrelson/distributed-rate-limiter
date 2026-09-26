@@ -4,8 +4,8 @@ _Populated by `make bench-all` output plus commentary. Empty sections mean the
 experiment has not been run yet, usually because the algorithm is still an
 exercise stub._
 
-Environment: Docker Desktop on Apple Silicon, 3 API replicas, Redis 7,
-loadgen on the host. Numbers are for comparing algorithms against each other,
+Environment: Docker Desktop on Apple Silicon, 3 Spring Boot replicas on
+virtual threads, Redis 7, loadgen (JDK HttpClient) on the host. Numbers are for comparing algorithms against each other,
 not absolute throughput claims.
 
 ## Steady state: 5 users, each limited to 50/10s, offered 2x
@@ -29,9 +29,12 @@ two bursts.
 | sliding_counter | | | | |
 | token_bucket | | | | |
 
-## Micro-benchmarks (in-memory, `make bench`)
+## Micro-benchmarks (in-memory, JMH via `make bench`)
 
-| algorithm | hot key ns/op | many keys ns/op | allocs/op | bytes per key |
+Throughput in ops/µs, 8 threads. `hotKey` is maximum contention on one key;
+`manyKeys` spreads calls over 1024 keys.
+
+| algorithm | hotKey ops/µs | manyKeys ops/µs | concurrency pattern | bytes per key |
 |---|---|---|---|---|
 | fixed_window | | | | |
 | token_bucket | | | | |

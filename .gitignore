@@ -1,9 +1,11 @@
-/bin/
+.gradle/
+build/
 /results/*
 !/results/.gitkeep
-*.test
-*.out
-coverage.*
+*.class
+*.log
 .DS_Store
 .idea/
+*.iml
 .vscode/
+out/
